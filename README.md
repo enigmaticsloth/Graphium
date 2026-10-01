@@ -203,4 +203,4 @@ For bug reports, include the selected chart, relevant settings, and a minimal sy
 
 ## License
 
-A license has not yet been selected for this repository.
+This project is licensed under the [MIT License](LICENSE).
