@@ -1,0 +1,45 @@
+# Python and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Machine-specific configuration and credentials
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.codex/
+.agents/
+.aws/
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.log
+
+# Local research inputs and generated figures
+data/
+uploads/
+exports/
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.png
+*.tif
+*.tiff
+*.svg
+*.pdf
+!examples/**/*.csv
+!examples/**/*.tsv
+!docs/images/**

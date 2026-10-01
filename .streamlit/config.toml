@@ -1,0 +1,3 @@
+[server]
+# Poll for source changes so imported UI modules reload reliably on macOS.
+fileWatcherType = "poll"
