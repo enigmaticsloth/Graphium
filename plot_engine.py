@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 import seaborn as sns
 from io import BytesIO
 from scipy import stats as sp_stats
-from annotation_engine import draw_annotations
+from annotation_engine import draw_annotations, draw_x_axis_groups
 
 # ── Style ────────────────────────────────────────────────────
 STYLE = {
@@ -228,7 +228,9 @@ def bar_chart(data_dict, categories, groups, ylabel='Value',
               sig_annotations=None, figsize=(8, 5),
               custom_annotations=None, annotation_fontsize=13,
               annotation_gap=8, symbol_spacing=1, xlim=None, ylim=None,
-              category_labels=None, group_labels=None):
+              category_labels=None, group_labels=None,
+              category_groups=None, category_group_gap=1.0,
+              group_label_fontsize=12, group_label_gap=10, group_label_lines=True):
     """
     data_dict: {(category, group): [values]}
     sig_annotations: [{'cat', 'group_idx', 'text'}] for above-bar
@@ -239,13 +241,21 @@ def bar_chart(data_dict, categories, groups, ylabel='Value',
 
     n_groups = len(groups)
     total_bw = bar_width * n_groups + group_gap * (n_groups - 1)
+    category_groups = category_groups or {}
+    positions, cursor = [], 0.0
+    for ci, cat in enumerate(categories):
+        if ci and category_groups.get(cat) and category_groups.get(categories[ci - 1]) \
+                and category_groups[cat] != category_groups[categories[ci - 1]]:
+            cursor += category_group_gap
+        positions.append(cursor)
+        cursor += total_bw + 0.6
 
     fig, ax = plt.subplots(figsize=figsize)
     all_pos = []
     rng = np.random.default_rng(42)
 
     for ci, cat in enumerate(categories):
-        base_x = ci * (total_bw + 0.6)
+        base_x = positions[ci]
         for gi, group in enumerate(groups):
             x = base_x + gi * (bar_width + group_gap)
             vals = data_dict.get((cat, group), [])
@@ -267,7 +277,7 @@ def bar_chart(data_dict, categories, groups, ylabel='Value',
             all_pos.append((x, m + s))
 
     # X labels
-    centers = [ci * (total_bw + 0.6) + (n_groups - 1) * (bar_width + group_gap) / 2
+    centers = [positions[ci] + (n_groups - 1) * (bar_width + group_gap) / 2
                for ci in range(len(categories))]
     ax.set_xticks(centers)
     ax.set_xticklabels([(category_labels or {}).get(cat, cat) for cat in categories], fontsize=xtick_fontsize,
@@ -284,7 +294,7 @@ def bar_chart(data_dict, categories, groups, ylabel='Value',
     annotations = []
 
     def bar_x(cat, gi):
-        return categories.index(cat) * (total_bw + 0.6) + gi * (bar_width + group_gap)
+        return positions[categories.index(cat)] + gi * (bar_width + group_gap)
 
     def bar_top(cat, gi):
         mean, sem, raw = calc_stats(data_dict.get((cat, groups[gi]), []), error_type)
@@ -339,6 +349,20 @@ def bar_chart(data_dict, categories, groups, ylabel='Value',
 
     apply_axis_limits(ax, xlim, ylim)
     fig.tight_layout()
+    spans = []
+    previous_label = None
+    for ci, cat in enumerate(categories):
+        label = category_groups.get(cat, '').strip()
+        if label:
+            left = positions[ci] - bar_width / 2
+            right = positions[ci] + total_bw - bar_width / 2
+            if label == previous_label:
+                spans[-1] = (spans[-1][0], right, label)
+            else:
+                spans.append((left, right, label))
+        previous_label = label
+    draw_x_axis_groups(ax, spans, fontsize=group_label_fontsize,
+                       gap_points=group_label_gap, show_lines=group_label_lines)
     draw_annotations(ax, annotations, fontsize=annotation_fontsize,
                      gap_points=annotation_gap, symbol_spacing=symbol_spacing,
                      expand_ylim=_automatic_ymax(ylim), clip_on=_manual_limits(xlim, ylim))

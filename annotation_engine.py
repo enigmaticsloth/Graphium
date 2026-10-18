@@ -4,6 +4,63 @@ import numpy as np
 from matplotlib.transforms import Bbox
 
 
+class LabelLayoutError(ValueError):
+    def __init__(self, message, figure):
+        super().__init__(message)
+        self.figure = figure
+
+
+def draw_x_axis_groups(ax, spans, fontsize=12, gap_points=10, show_lines=True):
+    """Place a lower label row and reserve space inside the fixed-size canvas.
+
+    spans contains (left edge, right edge, label), in x-axis data coordinates.
+    Physical spacing is measured from the bottom of the category tick labels.
+    """
+    if not spans:
+        return []
+    fig, artists = ax.figure, []
+    for _ in range(4):
+        for artist in artists:
+            artist.remove()
+        artists = []
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        pixels_per_point = fig.dpi / 72
+        tick_boxes = [label.get_window_extent(renderer) for label in ax.get_xticklabels()
+                      if label.get_visible() and label.get_text()]
+        tick_bottom = min((box.y0 for box in tick_boxes), default=ax.bbox.ymin)
+        line_depth = ax.bbox.ymin - tick_bottom + gap_points * pixels_per_point
+        text_depth = line_depth + (5 * pixels_per_point if show_lines else 0)
+        low, high = sorted(ax.get_xlim())
+        for left, right, label in spans:
+            left, right = max(left, low), min(right, high)
+            if left >= right:
+                continue
+            if show_lines:
+                line, = ax.plot([left, right], [-line_depth / ax.bbox.height] * 2,
+                                transform=ax.get_xaxis_transform(), color='black', lw=1,
+                                clip_on=False, scalex=False, scaley=False)
+                line.set_gid('x-axis-group-line')
+                artists.append(line)
+            text = ax.text((left + right) / 2, -text_depth / ax.bbox.height, label,
+                           transform=ax.get_xaxis_transform(), ha='center', va='top',
+                           fontsize=fontsize, fontweight='bold', color='black',
+                           clip_on=False, parse_math=False)
+            text.set_gid('x-axis-group-label')
+            artists.append(text)
+        boxes = [artist.get_window_extent(renderer) for artist in artists]
+        overflow = 8 * pixels_per_point - min((box.y0 for box in boxes), default=fig.bbox.ymax)
+        if overflow <= 0.5:
+            return artists
+        position = ax.get_position()
+        shift = (overflow + 1) / fig.bbox.height
+        if position.height - shift < 0.15:
+            raise LabelLayoutError('Increase figure height or reduce the X-axis group label size/spacing '
+                                   'to fit labels below the axis.', fig)
+        ax.set_position([position.x0, position.y0 + shift, position.width, position.height - shift])
+    return artists
+
+
 def spaced_symbols(text, spacing=1):
     """Space repeated symbols without changing their count or ordinary text."""
     text = str(text)

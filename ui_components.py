@@ -164,7 +164,7 @@ def figure_size_editor(chart_type):
     return width, height
 
 
-def grouped_name_editor(scope, categories, conditions):
+def grouped_name_editor(scope, categories, conditions, category_defaults=None):
     """Store display names independently of the identifiers used for data."""
     names = st.session_state.setdefault('grouped_display_names', {}).setdefault(
         scope, {'categories': {}, 'conditions': {}})
@@ -175,9 +175,38 @@ def grouped_name_editor(scope, categories, conditions):
         for item in items:
             key = hashlib.sha256(repr((scope, kind, item)).encode()).hexdigest()[:20]
             value = st.text_input(f'{label}: {item}',
-                                  value=names[kind].get(item, str(item)), key='name_' + key)
+                                  value=names[kind].get(item, (category_defaults or {}).get(item, str(item))
+                                                        if kind == 'categories' else str(item)), key='name_' + key)
             names[kind][item] = value.strip() or str(item)
     return names['categories'], names['conditions']
+
+
+def x_axis_group_editor(scope, categories, display_names=None, defaults=None):
+    """Assign a second label row to consecutive x-axis categories."""
+    names = st.session_state.setdefault('x_axis_group_names', {}).setdefault(scope, {})
+    display_names, defaults = display_names or {}, defaults or {}
+    with st.expander('X-axis groups', expanded=bool(defaults)):
+        enabled = st.checkbox('Show group labels below x-axis', value=bool(defaults),
+                              key=scope + '_xgroups_enabled')
+        if not enabled:
+            return {}
+        st.caption('Give adjacent categories the same group name to span them with one label. '
+                   'Leave a name empty to keep that category ungrouped.')
+        assigned = {}
+        for category in categories:
+            key = hashlib.sha256(repr((scope, category)).encode()).hexdigest()[:20]
+            value = st.text_input(
+                f'Group below {display_names.get(category, category)} ({category})',
+                value=names.get(category, defaults.get(category, '')), key='xgroup_' + key)
+            names[category] = value.strip()
+            assigned[category] = value.strip()
+        size = st.slider('Group label size (pt)', 8, 24, 12, key=scope + '_xgroups_size')
+        gap = st.slider('Gap below category labels (pt)', 4, 30, 10, key=scope + '_xgroups_gap')
+        lines = st.checkbox('Draw line above group labels', value=True, key=scope + '_xgroups_lines')
+        separation = st.slider('Extra gap between x-axis groups', 0.0, 3.0, 1.0, 0.1,
+                               key=scope + '_xgroups_separation')
+    return dict(category_groups=assigned, category_group_gap=separation,
+                group_label_fontsize=size, group_label_gap=gap, group_label_lines=lines)
 
 
 def remembered_multiselect(label, options, scope, name, default=None, format_func=str, **kwargs):

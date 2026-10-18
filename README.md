@@ -10,6 +10,7 @@ Graphium is a Streamlit application for turning spreadsheet data into research f
 
 - **Seven chart types:** bar, line, box, violin, scatter, pie/donut, and heatmap.
 - **Grouped bar charts:** recognize timepoint headers, show individual observations, and choose SEM or SD error bars.
+- **Fold change:** normalize bar, box, and violin plots to a selected control mean of 1.0.
 - **Built-in statistics:** automatic test selection or explicit Welch, Student, and paired t-tests between selected groups.
 - **Multiple comparisons:** Benjamini–Hochberg FDR, Bonferroni, or no correction.
 - **Editable figure settings:** axis limits, canvas width and height, axis labels, tick styling, colors, and legend placement.
@@ -95,6 +96,45 @@ Blank columns also separate general data blocks. A text label inside a block can
 For example, change `SB4` to `SB`. Display-name edits also appear in exports and statistical tables while preserving data assignments, selected comparisons, and manual-label targets.
 
 For line and scatter plots, assign numeric X and Y columns. Scatter plots support optional grouping, linear regression, and a Pearson correlation display. Heatmaps use numeric columns, with optional row normalization and clustering.
+
+### A second row of X-axis group labels
+
+For bar charts, open **Figure settings → X-axis groups** and enable
+**Show group labels below x-axis**. Assign the same group name to adjacent
+categories to show one centered label and a spanning line underneath them.
+For example, four categories can show `Distal`, `Proximal`, `Distal`, `Proximal`,
+with `Epithelium` below the first pair and `Mesenchyme` below the second pair.
+Leave a group name blank to omit its lower label. Label size, spacing, group
+separation, and spanning lines are adjustable. Preview and all four figure
+export formats include these labels within the selected canvas dimensions.
+
+Excel/CSV/TSV tables with sparse two- or three-row headers are also recognized:
+an optional tissue/group row, a category row, then a repeated condition row
+such as `Ctrl`, `TGFβ`, `T+D`, followed by numeric observations. Blank header
+cells inherit the preceding label. Repeated category names in different
+groups stay distinct in data assignments, statistics, and annotation targets.
+Detected parent groups populate the lower labels automatically; they remain
+editable. Missing observations and numeric zeros are preserved.
+
+### Fold change relative to control
+
+For bar, box, and violin plots, open **Figure settings → Normalization**, select
+**Fold change (control = 1.0)** under **Data scale**, and choose **Control group**.
+Each observation is divided by the mean of the selected control observations.
+For example, if the control mean is `0.02`, a measurement of `0.03` becomes `1.5`.
+The control **mean** becomes `1.0`; individual control points keep their variation,
+and SD/SEM error bars are calculated from the normalized observations.
+
+Grouped bars use the control mean **within each category/timepoint**. You can
+hide the control from the plotted groups while still using it as the reference.
+Every selected category must contain a control with numeric observations and a
+finite, non-zero mean; otherwise, Graphium displays a validation error.
+
+The preview, figure downloads, and statistical analysis all use the normalized
+observations. Missing observations keep their source-row positions for paired
+tests. The sidebar continues to show the imported data. Switch back to
+**Raw data** to restore the original scale. The Y-axis label defaults to
+**Fold change (control = 1.0)** in fold-change mode and remains editable.
 
 ## Statistical analysis
 

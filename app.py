@@ -13,8 +13,10 @@ import hashlib
 
 sys.path.insert(0, os.path.dirname(__file__))
 from ui_components import (apply_theme, manual_label_editor, axis_range_editor, figure_size_editor,
-                           grouped_name_editor, remembered_multiselect)
-from data_parser import parse_blocks
+                           grouped_name_editor, remembered_multiselect, x_axis_group_editor)
+from data_parser import parse_blocks, prepare_sheet
+from data_transform import normalize_to_control, NormalizationError
+from annotation_engine import LabelLayoutError
 from stat_engine import auto_analyze, pairwise_t_tests, p_to_stars, SIG_THRESHOLDS
 from plot_engine import (
     line_chart, bar_chart, pie_chart, box_plot,
@@ -58,7 +60,7 @@ with st.sidebar:
             sheets = {s: xls.parse(s) for s in sheet_names}
 
         selected_sheet = st.selectbox('Sheet', sheet_names)
-        df_raw = sheets[selected_sheet].copy()
+        df_raw = prepare_sheet(sheets[selected_sheet].copy())
 
         # Clean: drop fully empty rows/cols, coerce numeric columns
         df = df_raw.dropna(how='all').dropna(axis=1, how='all')
@@ -68,8 +70,14 @@ with st.sidebar:
             if converted.notna().sum() > df[col].notna().sum() * 0.5:
                 df[col] = converted
 
-        st.dataframe(df.head(10), use_container_width=True, height=200)
-        st.caption(f'{df.shape[0]} rows × {df.shape[1]} cols')
+        # Keep parser metadata (including missing source rows) out of Arrow's
+        # JSON schema sent to the browser; it remains available on df_raw.
+        df.attrs = {}
+        with st.expander('Imported data preview', expanded=True):
+            if 'graphium_blocks' in df_raw.attrs:
+                st.caption(f'{len(df_raw.attrs["graphium_blocks"])} categories detected from multiple header rows.')
+            st.dataframe(df.head(10), use_container_width=True, height=200, key='imported_data_preview')
+            st.caption(f'{df.shape[0]} rows × {df.shape[1]} cols')
     elif use_demo:
         # Synthetic observations for comparing templates without an upload.
         demo = {}
@@ -111,13 +119,14 @@ if df is not None:
 
         # ── Column assignment ────────────────────────────
         all_cols = df.columns.tolist()
+        normalization_container = st.container()
         axis_options = axis_range_editor(chart_type) if chart_type != 'Pie Chart' else {}
         fig_w, fig_h = figure_size_editor(chart_type)
 
         if chart_type in ['Bar Chart', 'Box Plot', 'Violin Plot']:
             source_id = hashlib.sha256(uploaded.getvalue()).hexdigest() if uploaded else 'example'
             name_scope = hashlib.sha256(repr((source_id, selected_sheet)).encode()).hexdigest()[:16]
-            category_names, condition_names = {}, {}
+            category_names, condition_names, category_control_names = {}, {}, {}
             with st.expander('Data & layout', expanded=True):
                 # Detect block structure from raw sheet (before dropna)
                 blocks, sheet_title = parse_blocks(df_raw)
@@ -138,10 +147,17 @@ if df is not None:
                                 all_conditions.append(c)
 
                     category_names, condition_names = grouped_name_editor(
-                        name_scope, block_labels, all_conditions)
+                        name_scope, block_labels, all_conditions,
+                        category_defaults={label: block.get('display_label', label)
+                                           for label, block in zip(block_labels, blocks)})
+                    for label in block_labels:
+                        display = category_names.get(label, label)
+                        duplicate = sum(category_names.get(other, other) == display
+                                        for other in block_labels) > 1
+                        category_control_names[label] = f'{display} ({label})' if duplicate else display
                     selected_genes = remembered_multiselect(
                         'Categories (x-axis)', block_labels, name_scope, 'categories',
-                        default=block_labels, format_func=lambda name: category_names.get(name, name))
+                        default=block_labels, format_func=lambda name: category_control_names.get(name, name))
                     selected_conditions = remembered_multiselect(
                         'Conditions (bars within each category)',
                         all_conditions, name_scope, 'conditions',
@@ -164,6 +180,16 @@ if df is not None:
                 else:
                     bar_layout = 'Separate bars (label under each)'
 
+            x_group_options = {}
+            if chart_type == 'Bar Chart' and (use_grouped or bar_layout.startswith('Separate')):
+                parent_defaults = ({label: block['parent_label']
+                                    for label, block in zip(block_labels, blocks)
+                                    if block.get('parent_label')} if use_grouped else {})
+                x_group_options = x_axis_group_editor(
+                    name_scope + ('_grouped' if use_grouped else '_flat'),
+                    selected_genes if use_grouped else value_cols,
+                    category_names, parent_defaults)
+
             pair_source = selected_conditions if use_grouped else value_cols
             pair_options = {f'{first} vs {second}': (first, second)
                             for i, first in enumerate(pair_source)
@@ -172,6 +198,31 @@ if df is not None:
             def pair_display_name(pair):
                 first, second = pair_options[pair]
                 return f'{condition_names.get(first, first)} vs {condition_names.get(second, second)}'
+
+            with normalization_container:
+                with st.expander('Normalization', expanded=True):
+                    data_scale = st.radio('Data scale', ['Raw data', 'Fold change (control = 1.0)'],
+                                          key=scope + '_data_scale')
+                    fold_change = data_scale != 'Raw data'
+                    control_group = None
+                    if fold_change:
+                        control_options = all_conditions if use_grouped else all_cols
+                        default_control = next((i for i, name in enumerate(control_options)
+                                                if str(name).strip().casefold() in ('ctrl', 'control')), 0)
+                        controls = st.session_state.setdefault('normalization_controls', {})
+                        if controls.get(scope) in control_options:
+                            default_control = control_options.index(controls[scope])
+                        control_group = st.selectbox(
+                            'Control group', control_options, index=default_control,
+                            format_func=lambda name: condition_names.get(name, str(name)),
+                            key=scope + '_control')
+                        controls[scope] = control_group
+                        st.caption('Fold change = each value / control mean. '
+                                   'The control mean is 1.0; individual points and error bars retain their variation.')
+                        if use_grouped:
+                            st.caption('Each category uses its own control mean. '
+                                       'The control can be used even when it is hidden from the chart.')
+                        st.caption('Figures, exports, and statistics use the normalized observations.')
 
             with st.expander('Statistics', expanded=True):
                 run_stats = st.checkbox('Auto-run statistics', value=True)
@@ -229,7 +280,7 @@ if df is not None:
                                        horizontal=True, index=0)
                 legend_loc = legend_pos.lower()
 
-                ylabel = st.text_input('Y-axis label', 'Value')
+                ylabel = st.text_input('Y-axis label', 'Fold change (control = 1.0)' if fold_change else 'Value')
 
             with st.expander('Annotation spacing'):
                 annotation_fontsize = st.slider('Automatic label size (pt)', 8, 28, 13)
@@ -237,7 +288,7 @@ if df is not None:
                 symbol_spacing = st.slider('Symbol spacing', 0, 3, 1,
                                            help='Adds space between repeated symbols, such as ** or ###.')
 
-            targets = ({(gene, cond): f'{category_names.get(gene, gene)} / {condition_names.get(cond, cond)}'
+            targets = ({(gene, cond): f'{category_control_names.get(gene, gene)} / {condition_names.get(cond, cond)}'
                         for gene in selected_genes for cond in selected_conditions}
                        if use_grouped else {(None, g): str(g) for g in value_cols})
             manual_labels = manual_label_editor(scope, targets)
@@ -336,20 +387,30 @@ if df is not None:
                 label_to_block = {(b['label'] or f'Block {i+1}'): b
                                   for i, b in enumerate(blocks)}
 
-                bar_data = {}
+                bar_data, category_data = {}, {}
                 for gene in categories:
                     block = label_to_block[gene]
+                    source = block['aligned_conditions']
+                    if fold_change:
+                        try:
+                            source = normalize_to_control(
+                                {name: values for name, values in source.items()
+                                 if name in groups or name == control_group}, control_group)
+                        except NormalizationError as error:
+                            raise NormalizationError(f'{category_names.get(gene, gene)}: {error}') from error
+                    category_data[gene] = source
                     for cond in groups:
-                        bar_data[(gene, cond)] = list(block['conditions'].get(cond, []))
+                        bar_data[(gene, cond)] = [value for value in source.get(cond, [])
+                                                  if not pd.isna(value)]
 
                 # Per-gene pairwise stats
                 sig_ann = []
                 per_gene_results = {}
                 if run_stats and n_groups >= 2:
                     for gene in categories:
-                        block = label_to_block[gene]
-                        source = block['aligned_conditions'] if stats_method == 't-test' else block['conditions']
-                        gdata = {c: list(source.get(c, []))
+                        source = category_data[gene]
+                        gdata = {c: (list(source.get(c, [])) if stats_method == 't-test'
+                                     else bar_data[(gene, c)])
                                  for c in groups}
                         if stats_method == 'Automatic':
                             gdata = {c: v for c, v in gdata.items() if len(v) >= 2}
@@ -389,6 +450,7 @@ if df is not None:
                     ytick_fontsize=ytick_fontsize, ytick_bold=ytick_bold,
                     legend_loc=legend_loc,
                     figsize=(fig_w, fig_h), **annotation_options, **axis_options,
+                    **x_group_options,
                 )
                 # Keep stat_result reference so the side panel can show per-gene tables
                 stat_result = per_gene_results if per_gene_results else None
@@ -398,11 +460,18 @@ if df is not None:
                 groups = value_cols
                 n_groups = len(groups)
 
-                # Build data dict — force numeric, drop any remaining strings
+                # Normalize aligned observations before filtering values for plots.
+                source_groups = {g: pd.to_numeric(df[g], errors='coerce').astype(float).tolist()
+                                 for g in groups}
+                if fold_change:
+                    if control_group not in source_groups:
+                        source_groups[control_group] = pd.to_numeric(
+                            df[control_group], errors='coerce').astype(float).tolist()
+                    source_groups = normalize_to_control(source_groups, control_group)
                 data = {}
                 groups_for_stats = {}
                 for g in groups:
-                    numeric_series = pd.to_numeric(df[g], errors='coerce')
+                    numeric_series = pd.Series(source_groups[g], dtype=float)
                     vals = numeric_series.dropna().astype(float).tolist()
                     data[g] = vals
                     groups_for_stats[g] = numeric_series.astype(float).tolist() if stats_method == 't-test' else vals
@@ -447,6 +516,7 @@ if df is not None:
                             legend_loc=legend_loc,
                             show_legend=False,
                             figsize=(fig_w, fig_h), **annotation_options, **axis_options,
+                            **x_group_options,
                         )
                     else:
                         # Clustered: all bars within single empty category, legend shows group names
@@ -658,16 +728,18 @@ if df is not None:
                 # Grouped mode: dict of {gene: StatResult} → render per-gene tabs
                 if isinstance(stat_result, dict):
                     gene_names = list(stat_result.keys())
-                    tabs = st.tabs([category_names.get(gene, gene) for gene in gene_names])
+                    tabs = st.tabs([category_control_names.get(gene, gene) for gene in gene_names])
                     for tab, gene in zip(tabs, gene_names):
                         with tab:
                             _render_stat_result(stat_result[gene])
                 else:
                     _render_stat_result(stat_result)
 
-        except AxisRangeError as e:
+        except (AxisRangeError, LabelLayoutError) as e:
             plt.close(e.figure)
             st.error(str(e))
+        except NormalizationError as e:
+            st.error(f'Cannot normalize: {e}')
         except Exception as e:
             st.error(f'Error: {e}')
             import traceback
